@@ -99,20 +99,34 @@ tr.lic:hover td{background:rgba(255,255,255,.02)}
 
 <script>
 const $ = s => document.querySelector(s);
-// O painel e este arquivo, aberto no PC (duplo clique); a API e a Edge Function do Supabase. Aberto pelo servidor_local.py, usa a dele.
+// O painel mora em https://boletobot-w.github.io/licencas/ (a funcao so aceita o /admin vindo de la, 12/11/2026);
+// a API e a Edge Function do Supabase. Aberto pelo servidor_local.py, usa a dele.
 const API = /^(127\.0\.0\.1|localhost)$/.test(location.hostname) ? '' : 'https://kqwirajucfaghpvxiaoc.supabase.co/functions/v1/licencas';
+const LOCAL = API === '';
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-let senha = sessionStorage.getItem('lic.senha') || '', dados = {licencas: [], registros: []};
+// Depois da senha certa o servidor devolve um PASSE assinado (vale 8 horas); so ele fica guardado, nunca a senha.
+let senha = '', passe = '', dados = {licencas: [], registros: []};
+try { passe = LOCAL ? '' : (sessionStorage.getItem('lic.passe') || ''); sessionStorage.removeItem('lic.senha'); } catch {}
 let tt; function toast(m) { const t = $('#toast'); t.textContent = m; t.hidden = false; clearTimeout(tt); tt = setTimeout(() => t.hidden = true, 4000); }
 async function admin(acao, extra) {
-  const r = await fetch(API + '/admin', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({senha, acao, ...(extra || {})})});
+  const cred = passe ? {passe} : {senha};
+  const r = await fetch(API + '/admin', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({...cred, acao, ...(extra || {})})});
   const j = await r.json().catch(() => ({}));
-  if (r.status === 401) { sair(); throw new Error('senha errada'); }
+  if (r.status === 401) { const tinha = !!passe; sair(); throw new Error(tinha ? 'entrada vencida: digite a senha de novo' : 'senha errada'); }
   if (!r.ok) throw new Error(j.erro || ('erro ' + r.status));
+  if (j.passe) { passe = j.passe; senha = ''; try { sessionStorage.setItem('lic.passe', passe); } catch {} }
   return j;
 }
 const data = s => s ? new Date(s).toLocaleDateString('pt-BR') : '—';
 const quando = s => s ? new Date(s).toLocaleString('pt-BR', {day: '2-digit', month: '2-digit', year: '2-digit', hour: '2-digit', minute: '2-digit'}) : '—';
+// o mesmo codigo que o programa mostra ao cliente (local/licenca.py codigo_curto): F568-1A0B-5880
+const codigoPc = id => { const p = String(id || '').toUpperCase(); return `${p.slice(0, 4)}-${p.slice(4, 8)}-${p.slice(8, 12)}`; };
+// numero inteiro dentro da faixa, senao avisa e nao manda nada
+function pedeInteiro(texto, atual, a, b) {
+  const n = prompt(texto, atual); if (n === null) return null;
+  if (!/^\s*\d+\s*$/.test(n) || +n < a || +n > b) { toast(`Digite um número inteiro de ${a} a ${b}`); return null; }
+  return +n;
+}
 function situacao(l) {
   if (l.status !== 'ativa') return l.status;
   if (l.plano === 'mensal' && l.vence_em && new Date(l.vence_em) < new Date()) return 'vencida';
@@ -126,11 +140,11 @@ function pinta() {
   $('#n-pausadas').textContent = sit.filter(s => s === 'pausada').length;
   $('#n-fora').textContent = sit.filter(s => s === 'vencida' || s === 'cancelada').length;
   $('#n-pcs').textContent = ls.reduce((n, l) => n + (l.pcs || []).filter(p => !p.liberada).length, 0);
-  const vis = ls.filter(l => !q || [l.cliente, l.contato, l.chave, l.obs, ...(l.pcs || []).map(p => p.pc_nome)].join(' ').toLowerCase().includes(q));
+  const vis = ls.filter(l => !q || [l.cliente, l.contato, l.chave, l.obs, ...(l.pcs || []).flatMap(p => [p.pc_nome, codigoPc(p.pc_id), p.pc_id])].join(' ').toLowerCase().includes(q));
   $('#mostrando').textContent = q ? `${vis.length} de ${ls.length}` : '';
   $('#lista').innerHTML = vis.map(l => {
     const s = situacao(l), ativos = (l.pcs || []).filter(p => !p.liberada).length;
-    const pcs = (l.pcs || []).map(p => `<div class="pc ${p.liberada ? 'liberada' : ''}" title="Visto por último ${quando(p.visto_em)} · versão ${esc(p.versao)}"><span>${esc(p.pc_nome || p.pc_id.slice(0, 12))}</span><small>${quando(p.visto_em)}</small>${p.liberada ? '' : `<button class="pq" data-a="liberar_pc" data-id="${l.id}" data-pc="${p.id}" title="Libera a vaga para o cliente ativar em outro PC; este para na próxima conferência">Liberar</button>`}</div>`).join('');
+    const pcs = (l.pcs || []).map(p => `<div class="pc ${p.liberada ? 'liberada' : ''}" title="Visto por último ${quando(p.visto_em)} · versão ${esc(p.versao)}"><span>${esc(p.pc_nome || '—')}</span><small class="chave" style="font-size:11px">${esc(codigoPc(p.pc_id))}</small><small>${quando(p.visto_em)}</small>${p.liberada ? '' : `<button class="pq" data-a="liberar_pc" data-id="${l.id}" data-pc="${p.id}" title="Libera a vaga para o cliente ativar em outro PC; este para na próxima conferência">Liberar</button>`}</div>`).join('');
     return `<tr class="lic"><td><b>${esc(l.cliente || '—')}</b><br><small>${esc(l.contato || '')}${l.obs ? ' · ' + esc(l.obs) : ''}</small></td>
       <td><span class="chave" data-copiar="${esc(l.chave)}" title="Clique para copiar">${esc(l.chave)}</span><br><small>criada ${data(l.criado_em)}</small></td>
       <td>${l.plano === 'mensal' ? 'Mensal' : 'Vitalícia'}<br><small>${l.plano === 'mensal' ? 'vence ' + data(l.vence_em) : 'não vence'}</small></td>
@@ -141,6 +155,8 @@ function pinta() {
         ${l.status === 'ativa' ? `<button class="pq amarelo" data-a="pausar" data-id="${l.id}">Pausar</button>` : `<button class="pq verde" data-a="reativar" data-id="${l.id}">Reativar</button>`}
         ${l.status !== 'cancelada' ? `<button class="pq perigo" data-a="cancelar" data-id="${l.id}">Cancelar</button>` : ''}
         <button class="pq" data-a="pcs" data-id="${l.id}" data-max="${l.max_pcs}">PCs</button>
+        <button class="pq" data-a="editar" data-id="${l.id}">Editar</button>
+        ${l.plano === 'mensal' ? `<button class="pq" data-a="vencimento" data-id="${l.id}">Vencimento</button>` : ''}
         <button class="pq" data-a="plano" data-id="${l.id}" data-plano="${l.plano}">${l.plano === 'mensal' ? 'Virar vitalícia' : 'Virar mensal'}</button>
       </div></td></tr>`;
   }).join('') || '<tr><td colspan="6"><small>Nenhuma licença ainda. Crie a primeira acima.</small></td></tr>';
@@ -150,44 +166,68 @@ function pinta() {
   }).join('') || '<small>Sem registros.</small>';
 }
 async function carrega() { try { dados = await admin('listar'); pinta(); } catch (e) { toast(e.message); } }
-async function entrar() {
-  senha = $('#senha').value;
-  try { dados = await admin('listar'); sessionStorage.setItem('lic.senha', senha); $('#entrar').hidden = true; $('#app').hidden = false; pinta(); }
+async function entrar(comPasse) {
+  if (!comPasse) { senha = $('#senha').value; passe = ''; }
+  try { dados = await admin('listar'); if (!LOCAL) $('#senha').value = ''; $('#entrar').hidden = true; $('#app').hidden = false; pinta(); }
   catch (e) { $('#entrar-erro').textContent = e.message; }
 }
-function sair() { senha = ''; sessionStorage.removeItem('lic.senha'); $('#app').hidden = true; $('#entrar').hidden = false; }
-$('#b-entrar').onclick = entrar; $('#senha').onkeydown = e => { if (e.key === 'Enter') entrar(); };
+function sair() { senha = ''; passe = ''; try { sessionStorage.removeItem('lic.passe'); } catch {} $('#app').hidden = true; $('#entrar').hidden = false; }
+$('#b-entrar').onclick = () => entrar(); $('#senha').onkeydown = e => { if (e.key === 'Enter') entrar(); };
 $('#b-sair').onclick = sair; $('#b-atualizar').onclick = carrega; $('#busca').oninput = pinta;
 $('#c-plano').onchange = () => $('#c-meses-l').hidden = $('#c-plano').value !== 'mensal';
 $('#b-criar').onclick = async () => {
+  const botao = $('#b-criar');
+  if (botao.disabled) return;
+  const meses = $('#c-meses').value.trim(), pcs = $('#c-pcs').value.trim();
+  if ($('#c-plano').value === 'mensal' && (!/^\d+$/.test(meses) || +meses < 1 || +meses > 36)) return toast('Meses pagos: um número inteiro de 1 a 36');
+  if (!/^\d+$/.test(pcs) || +pcs < 1 || +pcs > 100) return toast('PCs: um número inteiro de 1 a 100');
+  botao.disabled = true;   // clique duplo nao cria duas licencas
   try {
     const r = await admin('criar', {cliente: $('#c-cliente').value, contato: $('#c-contato').value, plano: $('#c-plano').value,
-      meses: +$('#c-meses').value, max_pcs: +$('#c-pcs').value, obs: $('#c-obs').value});
+      meses: +meses, max_pcs: +pcs, obs: $('#c-obs').value});
     try { await navigator.clipboard.writeText(r.licenca.chave); } catch {}
     toast('Licença criada: ' + r.licenca.chave + ' (copiada)');
     for (const id of ['#c-cliente', '#c-contato', '#c-obs']) $(id).value = '';
     carrega();
   } catch (e) { toast(e.message); }
+  finally { botao.disabled = false; }
 };
 document.addEventListener('click', async e => {
   const c = e.target.closest('[data-copiar]');
   if (c) { try { await navigator.clipboard.writeText(c.dataset.copiar); toast('Chave copiada'); } catch {} return; }
   const b = e.target.closest('[data-a]'); if (!b) return;
-  const id = +b.dataset.id, a = b.dataset.a;
+  const id = +b.dataset.id, a = b.dataset.a, l = dados.licencas.find(x => x.id === id) || {};
+  let r = null;
   try {
     if (a === 'cancelar' && !confirm('Cancelar esta licença? O programa do cliente para na próxima conferência (em até 4 horas).')) return;
     if (a === 'pausar' && !confirm('Pausar esta licença? O programa do cliente para na próxima conferência (em até 4 horas).')) return;
     if (a === 'liberar_pc' && !confirm('Liberar este PC? Ele para na próxima conferência e a vaga fica livre para outro PC.')) return;
-    if (a === 'pcs') { const n = prompt('Quantos PCs esta licença pode ativar?', b.dataset.max); if (!n) return; await admin('editar', {id, max_pcs: +n}); }
+    if (a === 'reativar' && l.status === 'cancelada' && !confirm('Esta licença foi CANCELADA. Reativar mesmo assim? O cliente volta a usar na próxima conferência.')) return;
+    if (a === 'pcs') { const n = pedeInteiro('Quantos PCs esta licença pode ativar? (1 a 100)', b.dataset.max, 1, 100); if (n === null) return; r = await admin('editar', {id, max_pcs: n}); }
+    else if (a === 'editar') {
+      const cliente = prompt('Cliente', l.cliente || ''); if (cliente === null) return;
+      const contato = prompt('Contato', l.contato || ''); if (contato === null) return;
+      const obs = prompt('Observação', l.obs || ''); if (obs === null) return;
+      r = await admin('editar', {id, cliente, contato, obs});
+    }
+    else if (a === 'vencimento') {
+      const atual = l.vence_em ? new Date(l.vence_em).toLocaleDateString('pt-BR', {timeZone: 'America/Sao_Paulo'}) : '';
+      const v = prompt('Vence em (dia/mês/ano; vale até 23:59 de Brasília)', atual); if (v === null) return;
+      if (!/^\s*\d{1,2}\/\d{1,2}\/\d{4}\s*$/.test(v)) return toast('Use o formato 31/12/2026');
+      r = await admin('editar', {id, vence_em: v.trim()});
+    }
     else if (a === 'plano') { const novo = b.dataset.plano === 'mensal' ? 'vitalicia' : 'mensal'; if (!confirm(`Mudar o plano para ${novo === 'mensal' ? 'mensal (vence em 30 dias)' : 'vitalícia (não vence)'}?`)) return; await admin('editar', {id, plano: novo}); }
-    else if (a === 'renovar') { const n = prompt('Renovar por quantos meses?', '1'); if (!n) return; await admin('renovar', {id, meses: +n}); }
+    else if (a === 'renovar') {
+      const n = pedeInteiro('Renovar por quantos meses? (1 a 36)' + (l.status === 'pausada' ? '\nA licença está PAUSADA: renovar também tira a pausa.' : ''), '1', 1, 36);
+      if (n === null) return; r = await admin('renovar', {id, meses: n});
+    }
     else if (a === 'liberar_pc') await admin('liberar_pc', {id, ativacao_id: +b.dataset.pc});
     else await admin(a, {id});
-    toast('Feito'); carrega();
+    toast(r && r.aviso ? 'Feito: ' + r.aviso : 'Feito'); carrega();
   } catch (err) { toast(err.message); }
 });
-if (senha) { $('#senha').value = senha; entrar(); }
-setInterval(() => { if (senha && !document.hidden) carrega(); }, 60000);
+if (passe) entrar(true);
+setInterval(() => { if ((passe || (LOCAL && senha)) && !$('#app').hidden && !document.hidden) carrega(); }, 60000);
 </script>
 </body>
 </html>
